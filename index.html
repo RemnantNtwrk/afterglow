@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Afterglow</title>
+<style>
+  :root {
+    --fg: #ffffff;
+    --fg-dim: rgba(255,255,255,0.68);
+    --glass: rgba(10,10,18,0.42);
+    --glass-strong: rgba(10,10,18,0.72);
+    --line: rgba(255,255,255,0.16);
+    --accent: #1ed760;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; color: var(--fg);
+    font-family: "Segoe UI", "SamsungOne", "Helvetica Neue", Arial, sans-serif; cursor: default; }
+  #gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+  .fade { transition: opacity 0.8s ease; }
+  .hidden { opacity: 0 !important; pointer-events: none; }
+
+  /* Now playing card (bottom-left, inside TV safe area) */
+  #card { position: fixed; left: 5vw; bottom: 6vh; display: flex; align-items: flex-end; gap: 2vw;
+    max-width: 60vw; transition: opacity 1.2s ease; }
+  #card.dim { opacity: 0.55; }
+  #art { width: 11vw; height: 11vw; min-width: 90px; min-height: 90px; border-radius: 0.8vw; object-fit: cover;
+    box-shadow: 0 1.5vw 4vw rgba(0,0,0,0.6); background: #222; }
+  #meta { min-width: 0; padding-bottom: 0.3vw; }
+  #title { font-size: max(22px, 2.6vw); font-weight: 700; line-height: 1.15; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; text-shadow: 0 2px 20px rgba(0,0,0,0.6); }
+  #artist { font-size: max(15px, 1.6vw); color: var(--fg-dim); margin-top: 0.4vw; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; text-shadow: 0 2px 14px rgba(0,0,0,0.6); }
+  #progress { margin-top: 1.2vw; width: 30vw; min-width: 200px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.2); overflow: hidden; }
+  #bar { height: 100%; width: 0%; background: var(--fg); border-radius: 2px; }
+  #times { display: flex; justify-content: space-between; width: 30vw; min-width: 200px; margin-top: 0.5vw;
+    font-size: max(11px, 0.9vw); color: var(--fg-dim); font-variant-numeric: tabular-nums; }
+  #paused { display: inline-block; margin-left: 0.8vw; font-size: max(11px, 0.9vw); font-weight: 600; letter-spacing: 0.1em;
+    padding: 0.2vw 0.6vw; border: 1px solid var(--line); border-radius: 99px; vertical-align: middle; color: var(--fg-dim); }
+
+  #status { position: fixed; left: 5vw; top: 5vh; font-size: max(12px, 1vw); color: var(--fg-dim);
+    display: flex; align-items: center; gap: 0.6vw; text-shadow: 0 1px 10px rgba(0,0,0,0.6); }
+  #status .dot { width: 0.6vw; height: 0.6vw; min-width: 7px; min-height: 7px; border-radius: 50%; background: var(--accent); }
+  #status.demo .dot { background: #b48cff; }
+
+  #toast { position: fixed; top: 5vh; left: 50%; transform: translateX(-50%); padding: 0.7vw 1.6vw;
+    border-radius: 99px; background: var(--glass); border: 1px solid var(--line);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    font-size: max(14px, 1.2vw); font-weight: 600; letter-spacing: 0.04em; }
+  #toast small { color: var(--fg-dim); font-weight: 400; margin-left: 0.6vw; }
+
+  #hint { position: fixed; right: 5vw; bottom: 6vh; text-align: right; font-size: max(11px, 0.85vw);
+    color: var(--fg-dim); line-height: 1.9; text-shadow: 0 1px 10px rgba(0,0,0,0.7); }
+  #hint kbd { display: inline-block; min-width: 1.6em; padding: 0 0.4em; margin-left: 0.3em; border: 1px solid var(--line);
+    border-radius: 4px; font-family: inherit; text-align: center; background: rgba(0,0,0,0.25); color: var(--fg); }
+
+  #idle { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; gap: 1vw; text-shadow: 0 2px 20px rgba(0,0,0,0.7); }
+  #idle h2 { font-size: max(22px, 2.4vw); font-weight: 600; }
+  #idle p { font-size: max(14px, 1.2vw); color: var(--fg-dim); max-width: 40vw; }
+
+  /* Menu */
+  #menu { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(ellipse at center, rgba(0,0,0,0.35), rgba(0,0,0,0.75)); }
+  #panel { width: min(560px, 90vw); padding: 3vw 3.2vw; border-radius: 1.4vw; text-align: center;
+    background: var(--glass-strong); border: 1px solid var(--line);
+    backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); box-shadow: 0 2vw 6vw rgba(0,0,0,0.5); }
+  #panel h1 { font-size: max(30px, 3.2vw); font-weight: 800; letter-spacing: -0.02em;
+    background: linear-gradient(90deg, #ff6ad5, #8a7dff, #4de1ff); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  #panel .sub { color: var(--fg-dim); font-size: max(14px, 1.1vw); margin: 0.6vw 0 2vw; }
+  #buttons { display: flex; flex-direction: column; gap: 0.9vw; }
+  #buttons button { font: inherit; font-size: max(16px, 1.3vw); font-weight: 600; color: var(--fg);
+    padding: 1vw 1.5vw; border-radius: 99px; border: 2px solid var(--line); background: rgba(255,255,255,0.06);
+    cursor: pointer; transition: transform 0.15s, background 0.15s, border-color 0.15s; outline: none; }
+  #buttons button.primary { background: var(--accent); border-color: var(--accent); color: #04210f; }
+  #buttons button.focus { transform: scale(1.04); border-color: #fff; box-shadow: 0 0 0 4px rgba(255,255,255,0.18); }
+  #buttons button:hover { border-color: rgba(255,255,255,0.6); }
+  #msg { min-height: 1.4em; margin-top: 1.4vw; font-size: max(13px, 1vw); color: #ffb3b3; }
+  #msg.ok { color: var(--fg-dim); }
+  #menu .keys { margin-top: 1.2vw; font-size: max(11px, 0.8vw); color: var(--fg-dim); }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+
+<div id="status" class="fade hidden"><span class="dot"></span><span id="statusText"></span></div>
+<div id="toast" class="fade hidden"></div>
+
+<div id="idle" class="fade hidden">
+  <h2>Nothing playing right now</h2>
+  <p>Start a song in Spotify on your phone, PC or TV and it will appear here.</p>
+</div>
+
+<div id="card" class="hidden">
+  <img id="art" alt="">
+  <div id="meta">
+    <div id="title"></div>
+    <div id="artist"></div>
+    <div id="progress"><div id="bar"></div></div>
+    <div id="times"><span id="tCur">0:00</span><span id="tDur">0:00</span></div>
+  </div>
+</div>
+
+<div id="hint" class="fade hidden">
+  Visual style <kbd>▲</kbd><kbd>▼</kbd><br>
+  Previous / next track <kbd>◀</kbd><kbd>▶</kbd><br>
+  Play / pause <kbd>OK</kbd><br>
+  Auto-change style <kbd>A</kbd> · Info <kbd>I</kbd> · Menu <kbd>Back</kbd>
+</div>
+
+<div id="menu">
+  <div id="panel">
+    <h1>Afterglow</h1>
+    <div class="sub">Music visuals for your big screen</div>
+    <div id="buttons"></div>
+    <div id="msg"></div>
+    <div class="keys">Use ▲ ▼ and OK to choose</div>
+  </div>
+</div>
+
+<script src="visualizer.js"></script>
+<script src="spotify.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
