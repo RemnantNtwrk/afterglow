@@ -169,7 +169,7 @@
     if (source !== 'spotify') return;
     if (Date.now() < backoffUntil || document.hidden) return schedulePoll(3000);
     try {
-      const r = await Spotify.playback();
+      const r = await SpotifyApi.playback();
       if (source !== 'spotify') return;
       if (r.status === 401) { stopSpotify(); openMenu('Your Spotify login expired. Please connect again.'); return; }
       if (r.status === 429) { backoffUntil = Date.now() + 15000; }
@@ -181,6 +181,7 @@
         setStatus(t && t.device ? 'Spotify · ' + t.device : 'Spotify connected');
         renderTrack();
       }
+      if ((r.status === 200 || r.status === 204) && !playerChecked) { playerChecked = true; maybeStartPlayer(); }
     } catch (e) { setStatus('Spotify · connection problem, retrying…'); }
     schedulePoll(3000);
   }
@@ -192,10 +193,54 @@
     setStatus('Spotify connected');
     closeMenu(); showHint(); poll();
   }
-  function stopSpotify() { source = null; clearTimeout(pollTimer); track = null; renderTrack(); setStatus(''); }
+  function stopSpotify() {
+    source = null; clearTimeout(pollTimer); track = null; renderTrack(); setStatus('');
+    playerChecked = false; WebPlayer.stop(); updateIdleText();
+  }
+
+  // ---------- Afterglow as a speaker (Web Playback SDK) ----------
+  let playerChecked = false;
+  const PLAYER_NAME = /Tizen|SMART-TV|Web0S|webOS/i.test(navigator.userAgent) ? 'Afterglow (TV)' : 'Afterglow (Browser)';
+
+  function maybeStartPlayer() {
+    // Logins from before this feature lack the "streaming" permission; the token's scope is
+    // known after the first API call, which is why this runs after the first poll.
+    if (!SpotifyApi.hasScope('streaming')) {
+      toast('To play music on this screen: press Back → Enable "Play on this screen"', 6000);
+      return;
+    }
+    WebPlayer.start({
+      name: PLAYER_NAME,
+      getToken: SpotifyApi.token,
+      onReady: () => { updateIdleText(); if (!track) toast('"' + PLAYER_NAME + '" is now a Spotify speaker', 3500); },
+      onNotReady: updateIdleText,
+      onStateChange: () => schedulePoll(400),
+      onError: (type, message) => {
+        console.warn('Spotify player', type, message);
+        if (type !== 'playback_error') toast('Playing on this screen isn\'t available: ' + message, 5000);
+      }
+    });
+  }
+
+  function updateIdleText() {
+    $('idleText').textContent = WebPlayer.deviceId()
+      ? 'Press OK to play here, or pick "' + PLAYER_NAME + '" as the device in Spotify on your phone.'
+      : 'Start a song in Spotify on your phone, PC or TV and it will appear here.';
+  }
+
+  async function playHere() {
+    const id = WebPlayer.deviceId();
+    if (!id) return;
+    WebPlayer.activate();
+    toast('Starting music on this screen…', 2000);
+    let r = await SpotifyApi.transfer(id);
+    if (r.status >= 400) r = await SpotifyApi.playOn(id);
+    if (r.status >= 400) toast('Couldn\'t start music here. Pick a song on your phone and choose "' + PLAYER_NAME + '".', 6000);
+    schedulePoll(800);
+  }
 
   async function spotifyControl(kind) {
-    const fn = { play: Spotify.play, pause: Spotify.pause, next: Spotify.next, previous: Spotify.previous }[kind];
+    const fn = { play: SpotifyApi.play, pause: SpotifyApi.pause, next: SpotifyApi.next, previous: SpotifyApi.previous }[kind];
     const r = await fn();
     if (r.status === 403) toast('Playback controls need Spotify Premium', 3000);
     else if (r.status === 404) toast('No active Spotify device — start playback first', 3000);
@@ -271,15 +316,22 @@
     paintFocus();
   }
 
-  function loginHere() { $('msg').className = 'ok'; $('msg').textContent = 'Opening Spotify login…'; Spotify.login(); }
+  function loginHere() { $('msg').className = 'ok'; $('msg').textContent = 'Opening Spotify login…'; SpotifyApi.login(); }
 
   function openMenu(message, ok) {
     stopPairing();
     const items = [];
     if (source) items.push({ label: 'Resume', run: closeMenu });
-    if (Spotify.isLoggedIn()) {
+    if (SpotifyApi.isLoggedIn()) {
       if (source !== 'spotify') items.push({ label: 'Use Spotify', primary: true, run: startSpotify });
-      items.push({ label: 'Disconnect Spotify', run: () => { Spotify.logout(); if (source === 'spotify') stopSpotify(); openMenu('Spotify disconnected.', true); } });
+      if (source === 'spotify' && WebPlayer.deviceId()) items.push({ label: 'Play on this screen', run: () => { closeMenu(); playHere(); } });
+      if (playerChecked && !SpotifyApi.hasScope('streaming')) {
+        items.push({ label: 'Enable "Play on this screen"', primary: true, run: () => {
+          SpotifyApi.logout(); stopSpotify();
+          if (ON_TV) openPairScreen(); else loginHere();
+        } });
+      }
+      items.push({ label: 'Disconnect Spotify', run: () => { SpotifyApi.logout(); if (source === 'spotify') stopSpotify(); openMenu('Spotify disconnected.', true); } });
     } else if (ON_TV) {
       items.push({ label: 'Sign in with your phone', primary: true, run: openPairScreen });
       items.push({ label: 'Sign in on this screen', run: loginHere });
@@ -309,7 +361,7 @@
     try {
       session = await Pair.startTv(rt => {
         stopPairing();
-        Spotify.setRefreshToken(rt);
+        SpotifyApi.setRefreshToken(rt);
         $('pairStatus').className = ''; $('pairStatus').textContent = 'Connected!';
         startSpotify(); toast('Spotify connected', 2500);
       }, msg => { if (gen === pairGen) $('pairStatus').textContent = msg; });
@@ -387,7 +439,9 @@
       case K.DOWN: setScene(viz.currentScene() + 1, true); break;
       case K.LEFT: case K.PREV: case K.RW: skip(-1); break;
       case K.RIGHT: case K.NEXT: case K.FF: skip(1); break;
-      case K.ENTER: case K.SPACE: case K.PLAYPAUSE: togglePlay(); break;
+      case K.ENTER: case K.SPACE: case K.PLAYPAUSE:
+        if (source === 'spotify' && !track && WebPlayer.deviceId()) playHere(); else togglePlay();
+        break;
       case K.PLAY: if (track && !track.playing) togglePlay(); break;
       case K.PAUSE: if (track && track.playing) togglePlay(); break;
       case K.GREEN: case 65: // A
@@ -405,7 +459,7 @@
   // ---------- Startup ----------
   (async function init() {
     Pair.captureFromHash();
-    const result = await Spotify.handleCallback();
+    const result = await SpotifyApi.handleCallback();
 
     // Spotify's login page sometimes sends people back with "server_error" for no clear reason.
     // Retrying usually works (you've already approved, so it passes straight through), max 2 times.
@@ -415,7 +469,7 @@
     if (result === 'error:server_error' && retries < 2) {
       try { localStorage.setItem(RETRY_KEY, JSON.stringify({ n: retries + 1, at: Date.now() })); } catch (e) {}
       showPanel({ sub: 'One moment…', items: [], message: 'Spotify had a hiccup, trying again…', ok: true });
-      setTimeout(() => Spotify.login(), 1200);
+      setTimeout(() => SpotifyApi.login(), 1200);
       return;
     }
     if (result) { try { localStorage.removeItem(RETRY_KEY); } catch (e) {} }
@@ -423,8 +477,8 @@
     // Opened from the TV's QR code: log in here, hand the login to the TV, keep nothing on this phone.
     if (Pair.pending()) {
       if (result === 'ok') {
-        const rt = Spotify.refreshToken();
-        Spotify.logout();
+        const rt = SpotifyApi.refreshToken();
+        SpotifyApi.logout();
         showPanel({ sub: 'Connecting your TV…', items: [], message: 'Sending your login to the TV…', ok: true });
         try {
           await Pair.send(rt);
@@ -438,7 +492,7 @@
 
     if (result === 'ok') { startSpotify(); toast('Spotify connected', 2500); return; }
     if (result && result.startsWith('error:')) { openMenu('Spotify login failed: ' + result.slice(6)); return; }
-    if (Spotify.isLoggedIn()) { startSpotify(); return; }
+    if (SpotifyApi.isLoggedIn()) { startSpotify(); return; }
     openMenu();
   })();
 })();

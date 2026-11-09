@@ -3,7 +3,9 @@
   'use strict';
 
   const CLIENT_ID = '478213c3340f4b9ea54549487f50da39';
-  const SCOPES = 'user-read-currently-playing user-read-playback-state user-modify-playback-state';
+  // "streaming" + email/private are required by Spotify's Web Playback SDK (Afterglow as a speaker).
+  const SCOPES = 'user-read-currently-playing user-read-playback-state user-modify-playback-state ' +
+                 'streaming user-read-email user-read-private';
   // Local testing uses http://127.0.0.1:8888/callback; when hosted (e.g. GitHub Pages)
   // Spotify sends you back to the app's own page, e.g. https://you.github.io/afterglow/
   const IS_LOCAL = location.hostname === '127.0.0.1';
@@ -56,6 +58,7 @@
     const tokens = {
       access: data.access_token,
       refresh: data.refresh_token || old.refresh,
+      scope: data.scope || old.scope || '',
       expires: Date.now() + (data.expires_in - 60) * 1000
     };
     store(TOKEN_KEY, tokens);
@@ -99,7 +102,7 @@
     const token = await accessToken(false);
     if (!token) return { status: 401, data: null };
     const res = await fetch('https://api.spotify.com/v1' + path, Object.assign({}, opts, {
-      headers: { Authorization: 'Bearer ' + token }
+      headers: Object.assign({ Authorization: 'Bearer ' + token }, opts && opts.headers)
     }));
     if (res.status === 401 && !retried) { await accessToken(true); return api(path, opts, true); }
     let data = null;
@@ -108,8 +111,15 @@
     return { status: res.status, data };
   }
 
-  window.Spotify = {
+  // Named SpotifyApi because Spotify's player SDK claims window.Spotify for itself.
+  window.SpotifyApi = {
     login, handleCallback,
+    token: () => accessToken(false),
+    hasScope: s => ((load(TOKEN_KEY) || {}).scope || '').split(' ').indexOf(s) >= 0,
+    // Move playback to a device (e.g. Afterglow's own player) and start playing there.
+    transfer: id => api('/me/player', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ device_ids: [id], play: true }) }),
+    playOn: id => api('/me/player/play?device_id=' + encodeURIComponent(id), { method: 'PUT' }),
     isLoggedIn: () => !!(load(TOKEN_KEY) || {}).refresh,
     logout: () => drop(TOKEN_KEY),
     // Used by phone sign-in: the phone hands its fresh login to the TV.
