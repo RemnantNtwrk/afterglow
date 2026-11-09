@@ -3,7 +3,7 @@
 (function () {
   'use strict';
 
-  const SCENES = ['Nebula', 'Hyper Tunnel', 'Kaleidoscope', 'Lava Orbs', 'Synthwave', 'Aurora'];
+  const SCENES = ['Crystal Cells', 'Hyper Tunnel', 'Kaleidoscope', 'Lava Orbs', 'Synthwave', 'Laser Show'];
 
   // TVs have weak mobile GPUs (e.g. Mali-G52): use fewer noise layers and a lower render size there.
   const LOW_POWER = /Tizen|SMART-TV|Web0S|webOS/i.test(navigator.userAgent);
@@ -48,23 +48,26 @@ vec3 pal(float t){
   return mix(u_c3, u_c1, smoothstep(0.0,1.0,t-2.0));
 }
 
-vec3 nebula(vec2 p, float t){
-  p *= 1.0 - u_pulse*0.04;
-#ifdef LOW_POWER
-  vec2 q = vec2(noise2(p*1.6 + t*0.08), noise2(p*1.6 + vec2(5.2,1.3) - t*0.07));
-#else
-  vec2 q = vec2(fbm(p*1.6 + t*0.08), fbm(p*1.6 + vec2(5.2,1.3) - t*0.07));
-#endif
-#ifdef LOW_POWER
-  vec2 r = vec2(noise2(p*1.6 + 3.5*q + vec2(1.7,9.2) + t*0.12), noise2(p*1.6 + 3.5*q + vec2(8.3,2.8) - t*0.1));
-#else
-  vec2 r = vec2(fbm(p*1.6 + 3.5*q + vec2(1.7,9.2) + t*0.12), fbm(p*1.6 + 3.5*q + vec2(8.3,2.8) - t*0.1));
-#endif
-  float f = fbm(p*1.6 + 3.5*r);
-  vec3 col = pal(f*1.3 + length(q)*0.4 + t*0.02);
-  col *= 0.15 + f*f*2.2;
-  col += pal(r.x + 0.33) * pow(r.y, 3.0) * 0.8;
-  return col;
+// Crystal Cells: a slowly shifting stained-glass mosaic with glowing borders (Voronoi).
+// Some cells flash on the beat.
+vec3 crystal(vec2 p, float t){
+  vec2 g = p*3.2 + vec2(t*0.05, t*0.03);
+  vec2 id = floor(g), f = fract(g);
+  float d1 = 8.0, d2 = 8.0; vec2 cid = vec2(0.0);
+  for(int y=-1;y<=1;y++){
+    for(int x=-1;x<=1;x++){
+      vec2 o = vec2(float(x), float(y));
+      vec2 h = vec2(hash(id + o), hash(id + o + 19.1));
+      vec2 pt = o + 0.5 + 0.4*sin(t*0.4 + h*6.2831) - f;   // each cell's centre drifts gently
+      float d = dot(pt, pt);
+      if(d < d1){ d2 = d1; d1 = d; cid = id + o; } else if(d < d2){ d2 = d; }
+    }
+  }
+  float edge = sqrt(d2) - sqrt(d1);                        // distance to the nearest border
+  float hc = hash(cid);
+  vec3 cell = pal(hc + t*0.02) * (0.15 + 0.35*(1.0 - sqrt(d1)));
+  cell *= 1.0 + step(0.75, hc) * u_pulse * 1.5;            // a quarter of the cells flash on the beat
+  return cell + pal(hc*0.3 + 0.5 + t*0.02) * exp(-edge*28.0) * (0.9 + u_pulse*0.6);
 }
 
 vec3 tunnel(vec2 p, float t){
@@ -159,33 +162,35 @@ vec3 synthwave(vec2 p, float t){
   return col;
 }
 
-vec3 aurora(vec2 p, float t){
-  vec3 col = vec3(0.0);
-  vec2 sgp = p*60.0; vec2 sg = floor(sgp); vec2 sf = fract(sgp) - 0.5;
-  col += vec3(1.0) * step(0.985, hash(sg)) * smoothstep(0.18, 0.0, length(sf)) * 0.7 * (0.5+0.5*sin(t*2.0 + hash(sg+1.0)*20.0));
-  for(int i=0;i<4;i++){
+// Laser Show: concert-style beams sweeping up from the bottom through haze, flaring on each beat.
+vec3 lasers(vec2 p, float t){
+  vec3 col = pal(0.66)*0.03;
+  col += pal(0.5) * noise(p*2.0 + vec2(t*0.1, 0.0)) * 0.06;            // haze
+  for(int i=0;i<8;i++){
     float fi = float(i);
-#ifdef LOW_POWER
-    float n = noise2(vec2(p.x*1.2 + fi*3.0 + t*0.07, t*0.04 + fi));
-#else
-    float n = fbm(vec2(p.x*1.2 + fi*3.0 + t*0.07, t*0.04 + fi));
-#endif
-    float y = p.y - (n - 0.5)*0.9 - 0.05 + fi*0.09;
-    float curtain = exp(-max(y, 0.0)*5.0) * smoothstep(-0.02, 0.0, y) ;
-    curtain += exp(-abs(y)*30.0)*0.8;
-    float streak = 0.55 + 0.45*noise(vec2(p.x*35.0 + fi*10.0, t*0.6));
-    col += pal(fi*0.27 + p.x*0.15 + t*0.015) * curtain * streak * 0.45 * (0.85 + u_pulse*0.3);
+    vec2 o = vec2((fi - 3.5)*0.24, -0.5);                              // emitters on the bottom edge
+    float a = 1.5708 + sin(t*(0.5 + fi*0.11) + fi*1.9)*0.75;           // sweeping angle
+    vec2 dir = vec2(cos(a), sin(a));
+    vec2 q = p - o;
+    float along = dot(q, dir);
+    float across = abs(q.x*dir.y - q.y*dir.x);
+    float ahead = step(0.0, along);
+    float fade = ahead * exp(-along*0.6);
+    float beam = (0.003/(across + 0.0025) + 0.0056/(across + 0.03)) * fade;   // core + soft halo in the haze
+    float point = exp(-dot(q, q)*300.0) * 0.6;                         // bright emitter point
+    col += pal(fi/8.0 + t*0.03) * (beam*(0.8 + u_pulse*1.1) + point);  // one colour lookup per beam
   }
+  col += pal(0.1) * exp(-abs(p.y + 0.5)*14.0) * 0.35;                  // glow along the stage edge
   return col;
 }
 
 vec3 scene(float m, vec2 p, float t){
-  if(m < 0.5) return nebula(p, t);
+  if(m < 0.5) return crystal(p, t);
   if(m < 1.5) return tunnel(p, t);
   if(m < 2.5) return kaleido(p, t);
   if(m < 3.5) return orbs(p, t);
   if(m < 4.5) return synthwave(p, t);
-  return aurora(p, t);
+  return lasers(p, t);
 }
 
 void main(){

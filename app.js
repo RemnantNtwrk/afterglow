@@ -208,9 +208,9 @@
   function pickScene(energy, h) {
     let options;
     if (energy == null) options = [0, 1, 2, 3, 4, 5];
-    else if (energy > 0.7) options = [1, 4, 2];  // Hyper Tunnel, Synthwave, Kaleidoscope
-    else if (energy > 0.4) options = [0, 2, 3];  // Nebula, Kaleidoscope, Lava Orbs
-    else options = [5, 0, 3];                    // Aurora, Nebula, Lava Orbs
+    else if (energy > 0.7) options = [1, 4, 5];  // Hyper Tunnel, Synthwave, Laser Show
+    else if (energy > 0.4) options = [0, 2, 3];  // Crystal Cells, Kaleidoscope, Lava Orbs
+    else options = [0, 3, 2];                    // Crystal Cells, Lava Orbs, Kaleidoscope
     const others = options.filter(i => i !== viz.currentScene());
     const list = others.length ? others : options;
     return list[h % list.length];
