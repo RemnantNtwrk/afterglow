@@ -5,11 +5,16 @@
 
   const SCENES = ['Nebula', 'Hyper Tunnel', 'Kaleidoscope', 'Liquid Waves', 'Warp Stars', 'Aurora'];
 
+  // TVs have weak mobile GPUs (e.g. Mali-G52): use fewer noise layers and a lower render size there.
+  const LOW_POWER = /Tizen|SMART-TV|Web0S|webOS/i.test(navigator.userAgent);
+
   const VERT = `
 attribute vec2 a_pos;
 void main(){ gl_Position = vec4(a_pos, 0.0, 1.0); }`;
 
   const FRAG = `
+#define OCTAVES ${LOW_POWER ? 3 : 5}
+${LOW_POWER ? '#define LOW_POWER' : ''}
 #ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
 #else
@@ -30,9 +35,11 @@ float noise(vec2 p){
 }
 float fbm(vec2 p){
   float v = 0.0, a = 0.5;
-  for(int i=0;i<5;i++){ v += a*noise(p); p = p*2.03 + vec2(1.7, 9.2); a *= 0.5; }
+  for(int i=0;i<OCTAVES;i++){ v += a*noise(p); p = p*2.03 + vec2(1.7, 9.2); a *= 0.5; }
   return v;
 }
+// Cheap 2-layer noise for effects evaluated many times per pixel.
+float noise2(vec2 p){ return noise(p)*0.65 + noise(p*2.03 + vec2(1.7, 9.2))*0.35; }
 mat2 rot(float a){ float c=cos(a), s=sin(a); return mat2(c,-s,s,c); }
 vec3 pal(float t){
   t = fract(t)*3.0;
@@ -43,8 +50,16 @@ vec3 pal(float t){
 
 vec3 nebula(vec2 p, float t){
   p *= 1.0 - u_pulse*0.04;
+#ifdef LOW_POWER
+  vec2 q = vec2(noise2(p*1.6 + t*0.08), noise2(p*1.6 + vec2(5.2,1.3) - t*0.07));
+#else
   vec2 q = vec2(fbm(p*1.6 + t*0.08), fbm(p*1.6 + vec2(5.2,1.3) - t*0.07));
+#endif
+#ifdef LOW_POWER
+  vec2 r = vec2(noise2(p*1.6 + 3.5*q + vec2(1.7,9.2) + t*0.12), noise2(p*1.6 + 3.5*q + vec2(8.3,2.8) - t*0.1));
+#else
   vec2 r = vec2(fbm(p*1.6 + 3.5*q + vec2(1.7,9.2) + t*0.12), fbm(p*1.6 + 3.5*q + vec2(8.3,2.8) - t*0.1));
+#endif
   float f = fbm(p*1.6 + 3.5*r);
   vec3 col = pal(f*1.3 + length(q)*0.4 + t*0.02);
   col *= 0.15 + f*f*2.2;
@@ -86,11 +101,19 @@ vec3 kaleido(vec2 p, float t){
 
 vec3 waves(vec2 p, float t){
   vec3 col = pal(0.66) * 0.05 * (1.0 - abs(p.y));
+#ifdef LOW_POWER
+  // 7 lines with single-layer noise on TVs.
+  for(int i=0;i<7;i++){
+    float fi = float(i);
+    float base = (fi - 3.0)*0.1;
+    float n = noise(vec2(p.x*1.5 + t*0.15, fi*3.1));
+#else
   for(int i=0;i<9;i++){
     float fi = float(i);
     float base = (fi - 4.0)*0.085;
-    float w = sin(p.x*(2.5+fi*0.35) + t*(0.5+fi*0.12) + fi*1.7)*0.07*(1.0+u_pulse*0.8)
-            + (fbm(vec2(p.x*1.5 + t*0.15, fi*3.1)) - 0.5)*0.18;
+    float n = noise2(vec2(p.x*1.5 + t*0.15, fi*3.1));
+#endif
+    float w = sin(p.x*(2.5+fi*0.35) + t*(0.5+fi*0.12) + fi*1.7)*0.07*(1.0+u_pulse*0.8) + (n - 0.5)*0.18;
     float d = abs(p.y - base - w);
     float line = 0.0035/(d+0.0015) + 0.02/(d+0.05)*0.15;
     col += pal(fi/9.0 + t*0.02 + p.x*0.05) * line * 0.5;
@@ -122,7 +145,11 @@ vec3 aurora(vec2 p, float t){
   col += vec3(1.0) * step(0.985, hash(sg)) * smoothstep(0.18, 0.0, length(sf)) * 0.7 * (0.5+0.5*sin(t*2.0 + hash(sg+1.0)*20.0));
   for(int i=0;i<4;i++){
     float fi = float(i);
+#ifdef LOW_POWER
+    float n = noise2(vec2(p.x*1.2 + fi*3.0 + t*0.07, t*0.04 + fi));
+#else
     float n = fbm(vec2(p.x*1.2 + fi*3.0 + t*0.07, t*0.04 + fi));
+#endif
     float y = p.y - (n - 0.5)*0.9 - 0.05 + fi*0.09;
     float curtain = exp(-max(y, 0.0)*5.0) * smoothstep(-0.02, 0.0, y) ;
     curtain += exp(-abs(y)*30.0)*0.8;
@@ -190,7 +217,12 @@ void main(){
     this.beatIndex = 0;   // 0..3 within a bar; beat 0 hits harder
     this.sharp = 6;       // how fast each pulse decays (higher = punchier)
     this.speed = 1;       // animation speed multiplier (driven by song energy)
-    this.scale = 0.6; this.frameTimes = [];
+    // Render size as a fraction of the screen (the image is smoothly scaled up to full screen).
+    // Measured on a Samsung TV (Mali-G52): 0.3 (576x324) keeps every style at ~60 fps.
+    this.minScale = LOW_POWER ? 0.25 : 0.3;
+    this.maxScale = LOW_POWER ? 0.35 : 0.8;
+    this.scale = LOW_POWER ? 0.3 : 0.6;
+    this.frameTimes = []; this.goodWindows = 0;
     this.time = 0; this.last = performance.now();
 
     this.resize = this.resize.bind(this);
@@ -274,13 +306,24 @@ void main(){
     gl.uniform1f(u.u_energy, this.energy);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 
-    // Adaptive resolution: TVs have weak GPUs, so lower the render scale if frames are slow.
-    this.frameTimes.push(dt);
-    if (this.frameTimes.length >= 60) {
-      const avg = this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length;
-      this.frameTimes = [];
-      if (avg > 0.024 && this.scale > 0.3) { this.scale = Math.max(0.3, this.scale - 0.1); this.resize(); }
-      else if (avg < 0.0175 && this.scale < 0.8) { this.scale = Math.min(0.8, this.scale + 0.05); this.resize(); }
+    // Adaptive resolution. Resizing itself causes a hitch, so: ignore crossfades (they briefly cost
+    // double), drop quickly when frames are slow, and only grow after several smooth windows in a row.
+    if (this.fade > 0) { this.frameTimes = []; }
+    else {
+      this.frameTimes.push(dt);
+      if (this.frameTimes.length >= 90) {
+        const avg = this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length;
+        this.frameTimes = [];
+        if (avg > 0.022 && this.scale > this.minScale) {
+          this.scale = Math.max(this.minScale, this.scale - 0.05); this.goodWindows = 0; this.resize();
+        } else if (avg < 0.0175) {
+          if (++this.goodWindows >= 4 && this.scale < this.maxScale) {
+            this.scale = Math.min(this.maxScale, this.scale + 0.05); this.goodWindows = 0; this.resize();
+          }
+        } else {
+          this.goodWindows = 0;
+        }
+      }
     }
     requestAnimationFrame(this.frame);
   };

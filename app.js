@@ -3,6 +3,7 @@
   'use strict';
 
   const $ = id => document.getElementById(id);
+  if (/Tizen|SMART-TV|Web0S|webOS/i.test(navigator.userAgent)) document.documentElement.classList.add('tv');
   let viz;
   try { viz = new Visualizer($('gl')); }
   catch (e) {

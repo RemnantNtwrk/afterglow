@@ -89,6 +89,8 @@
     border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%;
     vertical-align: -0.1em; animation: spin 0.9s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  /* TVs: the blurred-glass effect is expensive for their compositor, so use solid panels instead. */
+  html.tv #toast, html.tv #panel { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(10,10,18,0.88); }
   #menu .keys { margin-top: 1.2vw; font-size: max(11px, 0.8vw); color: var(--fg-dim); }
 </style>
 </head>
