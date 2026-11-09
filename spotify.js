@@ -3,9 +3,22 @@
   'use strict';
 
   const CLIENT_ID = '478213c3340f4b9ea54549487f50da39';
-  // "streaming" + email/private are required by Spotify's Web Playback SDK (Afterglow as a speaker).
-  const SCOPES = 'user-read-currently-playing user-read-playback-state user-modify-playback-state ' +
-                 'streaming user-read-email user-read-private';
+  // Permission sets, tried in order. Spotify has answered "server_error" for some of these on
+  // this app, so on that error the app steps down to the next set until one is accepted.
+  // "streaming" (+ email/private per Spotify's docs) is needed for Afterglow to act as a speaker.
+  const BASE = 'user-read-currently-playing user-read-playback-state user-modify-playback-state';
+  const SCOPE_TIERS = [
+    BASE + ' streaming user-read-email user-read-private',
+    BASE + ' streaming user-read-private',
+    BASE + ' streaming',
+    BASE
+  ];
+  const TIER_KEY = 'viz_scope_tier';
+  function getTier() {
+    const t = load(TIER_KEY);
+    return t && Date.now() - t.at < 10 * 60 * 1000 ? t.n : 0; // forget after 10 min so we retry the full set later
+  }
+  function setTier(n) { store(TIER_KEY, { n: Math.min(n, SCOPE_TIERS.length - 1), at: Date.now() }); }
   // Local testing uses http://127.0.0.1:8888/callback; when hosted (e.g. GitHub Pages)
   // Spotify sends you back to the app's own page, e.g. https://you.github.io/afterglow/
   const IS_LOCAL = location.hostname === '127.0.0.1';
@@ -33,7 +46,7 @@
     const state = randomString(16);
     store('viz_pkce', { verifier, state });
     const params = new URLSearchParams({
-      response_type: 'code', client_id: CLIENT_ID, scope: SCOPES,
+      response_type: 'code', client_id: CLIENT_ID, scope: SCOPE_TIERS[getTier()],
       redirect_uri: REDIRECT_URI, code_challenge_method: 'S256',
       code_challenge: await challengeFor(verifier), state
     });
@@ -114,6 +127,10 @@
   // Named SpotifyApi because Spotify's player SDK claims window.Spotify for itself.
   window.SpotifyApi = {
     login, handleCallback,
+    // Step down to a smaller permission set; returns false when there is nothing smaller left.
+    stepDownScopes: () => { const t = getTier(); if (t >= SCOPE_TIERS.length - 1) return false; setTier(t + 1); return true; },
+    resetScopes: () => drop(TIER_KEY),
+    scopeTier: getTier,
     token: () => accessToken(false),
     hasScope: s => ((load(TOKEN_KEY) || {}).scope || '').split(' ').indexOf(s) >= 0,
     // Move playback to a device (e.g. Afterglow's own player) and start playing there.

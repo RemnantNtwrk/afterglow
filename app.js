@@ -327,7 +327,7 @@
       if (source === 'spotify' && WebPlayer.deviceId()) items.push({ label: 'Play on this screen', run: () => { closeMenu(); playHere(); } });
       if (playerChecked && !SpotifyApi.hasScope('streaming')) {
         items.push({ label: 'Enable "Play on this screen"', primary: true, run: () => {
-          SpotifyApi.logout(); stopSpotify();
+          SpotifyApi.logout(); SpotifyApi.resetScopes(); stopSpotify();
           if (ON_TV) openPairScreen(); else loginHere();
         } });
       }
@@ -461,18 +461,13 @@
     Pair.captureFromHash();
     const result = await SpotifyApi.handleCallback();
 
-    // Spotify's login page sometimes sends people back with "server_error" for no clear reason.
-    // Retrying usually works (you've already approved, so it passes straight through), max 2 times.
-    const RETRY_KEY = 'viz_auth_retries';
-    let retries = 0;
-    try { const r = JSON.parse(localStorage.getItem(RETRY_KEY)); if (r && Date.now() - r.at < 5 * 60 * 1000) retries = r.n; } catch (e) {}
-    if (result === 'error:server_error' && retries < 2) {
-      try { localStorage.setItem(RETRY_KEY, JSON.stringify({ n: retries + 1, at: Date.now() })); } catch (e) {}
-      showPanel({ sub: 'One moment…', items: [], message: 'Spotify had a hiccup, trying again…', ok: true });
+    // Spotify answers "server_error" when it refuses one of the requested permissions.
+    // Step down to a smaller permission set and log in again (already approved, so it's quick).
+    if (result === 'error:server_error' && SpotifyApi.stepDownScopes()) {
+      showPanel({ sub: 'One moment…', items: [], message: 'Spotify refused a permission, trying again with fewer…', ok: true });
       setTimeout(() => SpotifyApi.login(), 1200);
       return;
     }
-    if (result) { try { localStorage.removeItem(RETRY_KEY); } catch (e) {} }
 
     // Opened from the TV's QR code: log in here, hand the login to the TV, keep nothing on this phone.
     if (Pair.pending()) {
