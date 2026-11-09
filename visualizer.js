@@ -7,6 +7,8 @@
 
   // TVs have weak mobile GPUs (e.g. Mali-G52): use fewer noise layers and a lower render size there.
   const LOW_POWER = /Tizen|SMART-TV|Web0S|webOS/i.test(navigator.userAgent);
+  // Extra per-style render-size factor on TVs (Crystal Cells does more work per pixel).
+  const SCENE_SCALE = LOW_POWER ? [0.85, 1, 1, 1, 1, 1] : [1, 1, 1, 1, 1, 1];
 
   const VERT = `
 attribute vec2 a_pos;
@@ -28,7 +30,10 @@ uniform float u_pulse, u_burst, u_energy;
 
 #define TAU 6.28318530718
 
-float hash(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p+45.32); return fract(p.x*p.y); }
+// Random number per lattice point. A multiply-and-fract hash rendered inconsistently on the TV's
+// Mali GPU (seams in the tunnel, stair-stepped mountains, strips in Crystal Cells); this sine-based
+// one with small inputs is consistent everywhere. The pattern repeats every 64 units (not visible).
+float hash(vec2 p){ p = mod(p, 64.0); return fract(sin(dot(p, vec2(12.9898, 78.233)))*43758.5453); }
 float noise(vec2 p){
   vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
   return mix(mix(hash(i), hash(i+vec2(1,0)), f.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y);
@@ -50,24 +55,55 @@ vec3 pal(float t){
 
 // Crystal Cells: a slowly shifting stained-glass mosaic with glowing borders (Voronoi).
 // Some cells flash on the beat.
+// Borders use the exact distance to the cell edge (two passes). The quicker "second-nearest point"
+// shortcut produced straight streaks along the hidden grid, which looked like screen tearing.
+#ifdef LOW_POWER
+#define CELL_R 1
+#else
+#define CELL_R 2
+#endif
+// Per-cell random numbers. The shared hash() gave inconsistent results per column on the TV's
+// Mali GPU (the picture split into cell-wide vertical strips), so cells use this sine-based one.
+vec2 cellHash(vec2 c){
+  c = mod(c, 64.0);   // keep sin() inputs small so the TV's GPU stays accurate (pattern repeats every 64 cells)
+  return fract(sin(vec2(dot(c, vec2(12.9898, 78.233)), dot(c, vec2(39.3468, 11.135))))*43758.5453);
+}
+vec2 cellPoint(vec2 c, float t){
+  return 0.5 + 0.35*sin(t*0.4 + cellHash(c)*6.2831);       // each cell's centre drifts gently
+}
 vec3 crystal(vec2 p, float t){
   vec2 g = p*3.2 + vec2(t*0.05, t*0.03);
-  vec2 id = floor(g), f = fract(g);
-  float d1 = 8.0, d2 = 8.0; vec2 cid = vec2(0.0);
+  vec2 n = floor(g), f = fract(g);
+  // Pass 1: nearest cell centre.
+  vec2 mg = vec2(0.0), mr = vec2(0.0); float md = 8.0;
   for(int y=-1;y<=1;y++){
     for(int x=-1;x<=1;x++){
       vec2 o = vec2(float(x), float(y));
-      vec2 h = vec2(hash(id + o), hash(id + o + 19.1));
-      vec2 pt = o + 0.5 + 0.4*sin(t*0.4 + h*6.2831) - f;   // each cell's centre drifts gently
-      float d = dot(pt, pt);
-      if(d < d1){ d2 = d1; d1 = d; cid = id + o; } else if(d < d2){ d2 = d; }
+      vec2 r = o + cellPoint(n + o, t) - f;
+      float d = dot(r, r);
+      // Branch-free "keep the nearest": an if() here rendered as vertical strips on the TV's Mali GPU.
+      float s = step(d, md);
+      md = mix(md, d, s); mr = mix(mr, r, s); mg = mix(mg, o, s);
     }
   }
-  float edge = sqrt(d2) - sqrt(d1);                        // distance to the nearest border
-  float hc = hash(cid);
-  vec3 cell = pal(hc + t*0.02) * (0.15 + 0.35*(1.0 - sqrt(d1)));
+  // Pass 2: exact distance to the nearest border, searching around that cell.
+  float edge = 8.0;
+  for(int y=-CELL_R;y<=CELL_R;y++){
+    for(int x=-CELL_R;x<=CELL_R;x++){
+      vec2 off = vec2(float(x), float(y));
+      vec2 o = mg + off;
+      vec2 r = o + cellPoint(n + o, t) - f;
+      vec2 dr = r - mr;
+      // Skip the nearest cell itself (by position in the loop, not by distance: the TV recomputes its
+      // point very slightly differently, which made a near-zero dr and a bogus white patch).
+      float self = 1.0 - step(0.5, abs(off.x) + abs(off.y));
+      edge = min(edge, dot(0.5*(mr + r), dr) * inversesqrt(max(dot(dr, dr), 1e-6)) + self*8.0);
+    }
+  }
+  float hc = cellHash(n + mg + 7.3).x;
+  vec3 cell = pal(hc + t*0.02) * (0.15 + 0.35*(1.0 - sqrt(md)));
   cell *= 1.0 + step(0.75, hc) * u_pulse * 1.5;            // a quarter of the cells flash on the beat
-  return cell + pal(hc*0.3 + 0.5 + t*0.02) * exp(-edge*28.0) * (0.9 + u_pulse*0.6);
+  return cell + pal(hc*0.3 + 0.5 + t*0.02) * exp(-edge*56.0) * (0.9 + u_pulse*0.6);
 }
 
 vec3 tunnel(vec2 p, float t){
@@ -248,6 +284,7 @@ void main(){
     this.maxScale = LOW_POWER ? 0.35 : 0.8;
     this.scale = LOW_POWER ? 0.3 : 0.6;
     this.frameTimes = []; this.goodWindows = 0;
+    this.sceneScale = SCENE_SCALE[0];
     this.time = 0; this.last = performance.now();
 
     this.resize = this.resize.bind(this);
@@ -260,8 +297,9 @@ void main(){
   Visualizer.SCENES = SCENES;
 
   Visualizer.prototype.resize = function () {
-    const w = Math.max(1, Math.round(window.innerWidth * this.scale));
-    const h = Math.max(1, Math.round(window.innerHeight * this.scale));
+    const s = this.scale * this.sceneScale;
+    const w = Math.max(1, Math.round(window.innerWidth * s));
+    const h = Math.max(1, Math.round(window.innerHeight * s));
     this.canvas.width = w; this.canvas.height = h;
     this.gl.viewport(0, 0, w, h);
   };
@@ -271,6 +309,10 @@ void main(){
     if (i === this.mode && this.fade === 0) return;
     if (this.fade > 0) this.mode = this.nextMode; // finish the running crossfade instantly
     this.nextMode = i; this.fade = 0.0001;
+    this.applySceneScale(Math.min(SCENE_SCALE[this.mode], SCENE_SCALE[i])); // both styles render during the fade
+  };
+  Visualizer.prototype.applySceneScale = function (f) {
+    if (f !== this.sceneScale) { this.sceneScale = f; this.resize(); }
   };
   Visualizer.prototype.currentScene = function () { return this.fade > 0 ? this.nextMode : this.mode; };
 
@@ -315,7 +357,7 @@ void main(){
 
     if (this.fade > 0) {
       this.fade += dt / 1.8;
-      if (this.fade >= 1) { this.mode = this.nextMode; this.fade = 0; }
+      if (this.fade >= 1) { this.mode = this.nextMode; this.fade = 0; this.applySceneScale(SCENE_SCALE[this.mode]); }
     }
 
     gl.uniform2f(u.u_res, this.canvas.width, this.canvas.height);
