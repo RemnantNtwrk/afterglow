@@ -407,6 +407,19 @@
     Pair.captureFromHash();
     const result = await Spotify.handleCallback();
 
+    // Spotify's login page sometimes sends people back with "server_error" for no clear reason.
+    // Retrying usually works (you've already approved, so it passes straight through), max 2 times.
+    const RETRY_KEY = 'viz_auth_retries';
+    let retries = 0;
+    try { const r = JSON.parse(localStorage.getItem(RETRY_KEY)); if (r && Date.now() - r.at < 5 * 60 * 1000) retries = r.n; } catch (e) {}
+    if (result === 'error:server_error' && retries < 2) {
+      try { localStorage.setItem(RETRY_KEY, JSON.stringify({ n: retries + 1, at: Date.now() })); } catch (e) {}
+      showPanel({ sub: 'One moment…', items: [], message: 'Spotify had a hiccup, trying again…', ok: true });
+      setTimeout(() => Spotify.login(), 1200);
+      return;
+    }
+    if (result) { try { localStorage.removeItem(RETRY_KEY); } catch (e) {} }
+
     // Opened from the TV's QR code: log in here, hand the login to the TV, keep nothing on this phone.
     if (Pair.pending()) {
       if (result === 'ok') {
