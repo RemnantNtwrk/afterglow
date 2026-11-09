@@ -187,6 +187,9 @@ void main(){
     this.target = this.colors.map(c => c.slice());
     this.burst = 0; this.pulse = 0; this.energy = 0.6;
     this.bpm = 112; this.playing = true; this.beatPhase = 0;
+    this.beatIndex = 0;   // 0..3 within a bar; beat 0 hits harder
+    this.sharp = 6;       // how fast each pulse decays (higher = punchier)
+    this.speed = 1;       // animation speed multiplier (driven by song energy)
     this.scale = 0.6; this.frameTimes = [];
     this.time = 0; this.last = performance.now();
 
@@ -217,7 +220,18 @@ void main(){
   // colors: array of 3 [r,g,b] in 0..1
   Visualizer.prototype.setPalette = function (colors) { this.target = colors.map(c => c.slice()); };
   Visualizer.prototype.triggerBurst = function () { this.burst = 1; };
-  Visualizer.prototype.setRhythm = function (bpm, energy) { this.bpm = bpm; this.energy = energy; };
+  // bpm: pulses per minute; energy 0..1: pulse strength; sharp: decay rate; speed: animation speed.
+  Visualizer.prototype.setRhythm = function (bpm, energy, sharp, speed) {
+    this.bpm = bpm; this.energy = energy;
+    if (sharp) this.sharp = sharp;
+    if (speed) this.speed = speed;
+  };
+  // Lock the pulse to the song's playback position (seconds) so it never drifts.
+  Visualizer.prototype.syncBeat = function (positionSec) {
+    const beats = positionSec * this.bpm / 60;
+    this.beatPhase = beats - Math.floor(beats);
+    this.beatIndex = Math.floor(beats) % 4;
+  };
   Visualizer.prototype.setPlaying = function (p) { this.playing = p; };
 
   Visualizer.prototype.frame = function (now) {
@@ -226,11 +240,13 @@ void main(){
     const gl = this.gl, u = this.u;
 
     // Slow down (not freeze) when paused so the screen still feels alive.
-    this.time = (this.time + dt * (this.playing ? 1 : 0.25)) % 3600;
+    this.time = (this.time + dt * (this.playing ? this.speed : 0.25)) % 3600;
 
     if (this.playing) {
-      this.beatPhase = (this.beatPhase + dt * this.bpm / 60) % 1;
-      this.pulse = Math.exp(-this.beatPhase * 6) * this.energy;
+      this.beatPhase += dt * this.bpm / 60;
+      if (this.beatPhase >= 1) { this.beatPhase -= Math.floor(this.beatPhase); this.beatIndex = (this.beatIndex + 1) % 4; }
+      const accent = this.beatIndex === 0 ? 1.35 : 1;
+      this.pulse = Math.exp(-this.beatPhase * this.sharp) * this.energy * accent;
     } else {
       this.pulse *= 0.9;
     }

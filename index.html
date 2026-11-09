@@ -32,6 +32,9 @@
     text-overflow: ellipsis; text-shadow: 0 2px 20px rgba(0,0,0,0.6); }
   #artist { font-size: max(15px, 1.6vw); color: var(--fg-dim); margin-top: 0.4vw; white-space: nowrap; overflow: hidden;
     text-overflow: ellipsis; text-shadow: 0 2px 14px rgba(0,0,0,0.6); }
+  #feat { display: inline-block; margin-top: 0.6vw; padding: 0.2vw 0.7vw; border-radius: 99px;
+    border: 1px solid var(--line); background: rgba(0,0,0,0.25); font-size: max(11px, 0.9vw);
+    font-weight: 600; letter-spacing: 0.04em; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
   #progress { margin-top: 1.2vw; width: 30vw; min-width: 200px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.2); overflow: hidden; }
   #bar { height: 100%; width: 0%; background: var(--fg); border-radius: 2px; }
   #times { display: flex; justify-content: space-between; width: 30vw; min-width: 200px; margin-top: 0.5vw;
@@ -105,6 +108,7 @@
   <div id="meta">
     <div id="title"></div>
     <div id="artist"></div>
+    <div id="feat" style="display:none"></div>
     <div id="progress"><div id="bar"></div></div>
     <div id="times"><span id="tCur">0:00</span><span id="tDur">0:00</span></div>
   </div>

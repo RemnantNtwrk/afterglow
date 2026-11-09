@@ -123,17 +123,104 @@
     viz.setPlaying(!t || t.playing);
     if (changed && t) {
       const h = hashStr(t.id);
-      // Spotify no longer gives apps tempo data, so this is a per-song rhythm, not true beat sync.
-      viz.setRhythm(86 + (h % 42), 0.55 + ((h >> 8) % 40) / 100);
-      viz.setPalette(hashPalette(t.id));
+      // Until (or unless) real song data arrives, use an estimated per-song rhythm.
+      viz.setRhythm(86 + (h % 42), 0.55 + ((h >> 8) % 40) / 100, 6, 1);
+      features = null; showFeatures(null);
+      basePalette = hashPalette(t.id); applyPalette();
       viz.triggerBurst();
-      if (autoCycle && source) setScene(viz.currentScene() + 1 + (h % (SCENES.length - 1)), true);
+      if (source === 'spotify') {
+        const id = t.id;
+        loadFeatures(id).then(f => {
+          if (!track || track.id !== id) return; // song changed meanwhile
+          if (f) applyFeatures(f);
+          if (autoCycle) setScene(pickScene(f ? f.energy : null, h), true);
+        });
+      } else if (autoCycle && source) {
+        setScene(viz.currentScene() + 1 + (h % (SCENES.length - 1)), true);
+      }
       const img = $('art');
       img.crossOrigin = 'anonymous';
-      img.onload = () => { try { viz.setPalette(paletteFromImage(img)); } catch (e) { /* keep hash palette */ } };
+      img.onload = () => { try { basePalette = paletteFromImage(img); applyPalette(); } catch (e) { /* keep hash palette */ } };
       img.src = t.art || '';
     }
     if (changed || playChanged) renderTrack();
+  }
+
+  // ---------- Song data (tempo, energy, mood) from ReccoBeats ----------
+  // Spotify's own audio-features API is closed to new apps, and Spotify's audio is copy-protected,
+  // so it can't be analysed directly. ReccoBeats (free) has the same data for many songs.
+  // Only the Spotify track ID is sent.
+  let features = null, basePalette = null;
+
+  async function loadFeatures(id) {
+    const key = 'viz_feat_' + id;
+    try { const c = JSON.parse(localStorage.getItem(key)); if (c && Date.now() - c.at < (c.f ? 30 : 3) * 86400000) return c.f; } catch (e) {} // re-check unknown songs sooner
+    let f = null;
+    try {
+      const ctrl = window.AbortController ? new AbortController() : null;
+      const timer = setTimeout(() => ctrl && ctrl.abort(), 4000);
+      const res = await fetch('https://api.reccobeats.com/v1/audio-features?ids=' + encodeURIComponent(id),
+        { headers: { Accept: 'application/json' }, signal: ctrl ? ctrl.signal : undefined });
+      clearTimeout(timer);
+      if (res.ok) {
+        const d = await res.json();
+        const x = d && d.content && d.content[0];
+        if (x && x.tempo) f = { tempo: x.tempo, energy: x.energy, danceability: x.danceability,
+                                valence: x.valence, mode: x.mode, loudness: x.loudness };
+      }
+    } catch (e) { return null; } // network trouble: don't cache, try again next time
+    try { localStorage.setItem(key, JSON.stringify({ f, at: Date.now() })); } catch (e) {}
+    return f;
+  }
+
+  function applyFeatures(f) {
+    features = f;
+    // Keep pulses in a comfortable range (very fast songs pulse on every other beat).
+    let bpm = f.tempo;
+    while (bpm > 150) bpm /= 2;
+    while (bpm < 70) bpm *= 2;
+    viz.setRhythm(bpm,
+      0.35 + f.energy * 0.65,          // pulse strength
+      4 + (f.danceability || 0.5) * 8, // punchiness
+      0.55 + f.energy * 0.9);          // animation speed
+    if (track && track.playing) viz.syncBeat((track.progress + (Date.now() - track.at)) / 1000);
+    applyPalette();
+    showFeatures(f);
+  }
+
+  // Album-art colors, nudged warmer for happy songs and cooler for sad ones.
+  function applyPalette() {
+    if (!basePalette) return;
+    if (!features || features.valence == null) { viz.setPalette(basePalette); return; }
+    const v = features.valence, target = v >= 0.5 ? 35 : 220, amount = Math.abs(v - 0.5) * 0.6;
+    viz.setPalette(basePalette.map(c => {
+      let [h, s, l] = rgbToHsl(c[0], c[1], c[2]);
+      const diff = ((target - h + 540) % 360) - 180;
+      h += diff * amount;
+      s = Math.min(1, s * (0.85 + v * 0.3));
+      if (features.mode === 0) l *= 0.92; // minor key: a touch darker
+      return hslToRgb(h, s, l);
+    }));
+  }
+
+  // Pick a visual style that suits the song's energy.
+  function pickScene(energy, h) {
+    let options;
+    if (energy == null) options = [0, 1, 2, 3, 4, 5];
+    else if (energy > 0.7) options = [1, 4, 2];  // Hyper Tunnel, Warp Stars, Kaleidoscope
+    else if (energy > 0.4) options = [0, 2, 3];  // Nebula, Kaleidoscope, Liquid Waves
+    else options = [5, 0, 3];                    // Aurora, Nebula, Liquid Waves
+    const others = options.filter(i => i !== viz.currentScene());
+    const list = others.length ? others : options;
+    return list[h % list.length];
+  }
+
+  function showFeatures(f) {
+    const el = $('feat');
+    if (!f) { el.textContent = ''; el.style.display = 'none'; return; }
+    const label = f.energy > 0.75 ? 'High energy' : f.energy > 0.45 ? 'Medium energy' : 'Chill';
+    el.textContent = Math.round(f.tempo) + ' BPM · ' + label;
+    el.style.display = '';
   }
 
   // Smooth progress between polls.
@@ -178,6 +265,7 @@
         const t = trackFromPlayback(r.data);
         setTrack(t);
         if (track && t) { track.progress = t.progress; track.at = t.at; }
+        if (features && t && t.playing) viz.syncBeat(t.progress / 1000); // keep pulse locked to the song
         setStatus(t && t.device ? 'Spotify · ' + t.device : 'Spotify connected');
         renderTrack();
       }
