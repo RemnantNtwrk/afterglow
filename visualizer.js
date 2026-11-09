@@ -3,7 +3,7 @@
 (function () {
   'use strict';
 
-  const SCENES = ['Nebula', 'Hyper Tunnel', 'Kaleidoscope', 'Liquid Waves', 'Warp Stars', 'Aurora'];
+  const SCENES = ['Nebula', 'Hyper Tunnel', 'Kaleidoscope', 'Lava Orbs', 'Synthwave', 'Aurora'];
 
   // TVs have weak mobile GPUs (e.g. Mali-G52): use fewer noise layers and a lower render size there.
   const LOW_POWER = /Tizen|SMART-TV|Web0S|webOS/i.test(navigator.userAgent);
@@ -99,42 +99,62 @@ vec3 kaleido(vec2 p, float t){
   return col * smoothstep(1.4, 0.2, r);
 }
 
-vec3 waves(vec2 p, float t){
-  vec3 col = pal(0.66) * 0.05 * (1.0 - abs(p.y));
-#ifdef LOW_POWER
-  // 7 lines with single-layer noise on TVs.
-  for(int i=0;i<7;i++){
+// Lava Orbs: glossy blobs that drift, merge and split (metaballs). Swell on each beat.
+vec3 orbs(vec2 p, float t){
+  vec3 col = mix(pal(0.66), pal(0.9), p.y*0.5 + 0.5) * 0.06;
+  float field = 0.0;
+  float grow = 1.0 + u_pulse*0.18;
+  for(int i=0;i<6;i++){
     float fi = float(i);
-    float base = (fi - 3.0)*0.1;
-    float n = noise(vec2(p.x*1.5 + t*0.15, fi*3.1));
-#else
-  for(int i=0;i<9;i++){
-    float fi = float(i);
-    float base = (fi - 4.0)*0.085;
-    float n = noise2(vec2(p.x*1.5 + t*0.15, fi*3.1));
-#endif
-    float w = sin(p.x*(2.5+fi*0.35) + t*(0.5+fi*0.12) + fi*1.7)*0.07*(1.0+u_pulse*0.8) + (n - 0.5)*0.18;
-    float d = abs(p.y - base - w);
-    float line = 0.0035/(d+0.0015) + 0.02/(d+0.05)*0.15;
-    col += pal(fi/9.0 + t*0.02 + p.x*0.05) * line * 0.5;
+    vec2 c = vec2(sin(t*(0.21 + fi*0.037) + fi*2.1)*0.75, sin(t*(0.17 + fi*0.029) + fi*1.3)*0.38);
+    float r = (0.11 + 0.04*sin(t*0.5 + fi*1.7)) * grow;
+    vec2 d = p - c;
+    field += r*r / (dot(d, d) + 0.0001);
   }
+  float body = smoothstep(0.95, 1.05, field);
+  float core = smoothstep(1.0, 4.0, field);
+  float rim = exp(-abs(field - 1.0)*6.0);
+  vec3 a = pal(t*0.03 + p.x*0.15);
+  vec3 b = pal(t*0.03 + 0.4 + p.y*0.2);
+  col += mix(a, b, core) * body * (0.6 + core*0.8);
+  col += pal(t*0.03 + 0.7) * rim * 0.9;                     // bright glowing edge
+  col += a * min(field, 1.0) * 0.18;                        // soft halo around blobs
+  col += vec3(1.0) * smoothstep(2.5, 6.0, field) * 0.25;    // glossy highlight in the middle
   return col;
 }
 
-vec3 stars(vec2 p, float t){
-  vec3 col = pal(0.8) * fbm(p*2.0 + t*0.03) * 0.12;
-  float speed = 0.12 + u_pulse*0.03 + u_burst*0.3;
-  for(int i=0;i<4;i++){
-    float fi = float(i);
-    float depth = fract(fi*0.25 + t*speed);
-    float scale = mix(18.0, 1.2, depth);
-    vec2 g = p*scale*rot(fi*1.3) + fi*17.0;
-    vec2 id = floor(g); vec2 f = fract(g) - 0.5;
-    float h = hash(id + fi*13.0);
-    vec2 off = vec2(hash(id+3.1), hash(id+7.7)) - 0.5;
-    float d = length(f - off*0.7);
-    float fadeIn = smoothstep(0.0, 0.3, depth) * smoothstep(1.0, 0.85, depth);
-    col += pal(h + fi*0.2) * (0.012/(d+0.004)) * step(0.55, h) * fadeIn * (0.8 + u_pulse*0.5);
+// Synthwave: striped neon sun, mountain silhouettes and a glowing grid racing toward you.
+vec3 synthwave(vec2 p, float t){
+  float hz = -0.08;                                         // horizon height
+  vec3 col;
+  if(p.y > hz){
+    float h = p.y - hz;
+    col = mix(pal(0.0)*0.55, pal(0.66)*0.08, smoothstep(0.0, 0.55, h));   // sky, glowing near the horizon
+    vec2 sc = vec2(0.0, 0.17);
+    float sr = 0.27 * (1.0 + u_pulse*0.06);                // sun pulses on the beat
+    float d = length(p - sc);
+    float sun = smoothstep(sr, sr - 0.006, d);
+    float yy = (p.y - sc.y) / sr;
+    float stripe = step(0.0, -yy) * step(fract(yy*7.0 + t*0.35), (-yy)*0.55);  // sliding stripes, lower half
+    sun *= 1.0 - stripe;
+    vec3 sunCol = mix(pal(0.33), pal(0.0), clamp(0.5 - yy*0.5, 0.0, 1.0));
+    col += sunCol * sun * 1.4;
+    col += pal(0.0) * exp(-max(d - sr, 0.0)*7.0) * 0.35 * (1.0 + u_pulse*0.5);  // sun glow
+    float m = hz + 0.02 + 0.08*noise(vec2(p.x*2.6 + 3.0, 1.0)) + 0.03*noise(vec2(p.x*7.0, 2.0));
+    if(p.y < m){                                            // mountains
+      col = mix(pal(0.66)*0.04, pal(0.66)*0.12, (p.y - hz)/max(m - hz, 0.001));
+      col += pal(0.5) * exp(-(m - p.y)*60.0) * 0.6;         // glowing ridge line
+    }
+  } else {
+    float depth = hz - p.y;
+    float z = 0.3 / (depth + 0.003);                        // distance along the ground
+    float gx = abs(fract(p.x*z*0.9) - 0.5);
+    float gz = abs(fract(z*0.9 - t*1.2) - 0.5);             // grid scrolls toward you (faster for energetic songs)
+    float w = 0.04 + z*0.004;                               // wider far lines = less shimmer
+    float lines = smoothstep(w, 0.0, gx) + smoothstep(w*1.2, 0.0, gz);
+    float fade = exp(-z*0.09);
+    col = pal(0.66)*0.05 + pal(depth*0.6) * min(lines, 1.2) * fade * (1.1 + u_pulse*0.7);
+    col += pal(0.0) * exp(-depth*14.0) * 0.5;               // horizon glow on the floor
   }
   return col;
 }
@@ -163,8 +183,8 @@ vec3 scene(float m, vec2 p, float t){
   if(m < 0.5) return nebula(p, t);
   if(m < 1.5) return tunnel(p, t);
   if(m < 2.5) return kaleido(p, t);
-  if(m < 3.5) return waves(p, t);
-  if(m < 4.5) return stars(p, t);
+  if(m < 3.5) return orbs(p, t);
+  if(m < 4.5) return synthwave(p, t);
   return aurora(p, t);
 }
 
