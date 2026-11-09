@@ -78,6 +78,14 @@
   #buttons button:hover { border-color: rgba(255,255,255,0.6); }
   #msg { min-height: 1.4em; margin-top: 1.4vw; font-size: max(13px, 1vw); color: #ffb3b3; }
   #msg.ok { color: var(--fg-dim); }
+  #pairBox { margin: -0.6vw 0 1.6vw; }
+  #qr { display: inline-block; padding: 14px; background: #fff; border-radius: 14px; line-height: 0; }
+  #qr svg, #qr img { width: min(260px, 22vw); height: min(260px, 22vw); min-width: 180px; min-height: 180px; }
+  #pairStatus { margin-top: 1vw; font-size: max(13px, 1vw); color: var(--fg-dim); }
+  #pairStatus.spin::before { content: ""; display: inline-block; width: 0.8em; height: 0.8em; margin-right: 0.5em;
+    border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%;
+    vertical-align: -0.1em; animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   #menu .keys { margin-top: 1.2vw; font-size: max(11px, 0.8vw); color: var(--fg-dim); }
 </style>
 </head>
@@ -112,15 +120,21 @@
 <div id="menu">
   <div id="panel">
     <h1>Afterglow</h1>
-    <div class="sub">Music visuals for your big screen</div>
+    <div class="sub" id="sub">Music visuals for your big screen</div>
+    <div id="pairBox" style="display:none">
+      <div id="qr"></div>
+      <div id="pairStatus">Waiting for your phone…</div>
+    </div>
     <div id="buttons"></div>
     <div id="msg"></div>
     <div class="keys">Use ▲ ▼ and OK to choose</div>
   </div>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <script src="visualizer.js"></script>
 <script src="spotify.js"></script>
+<script src="pair.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

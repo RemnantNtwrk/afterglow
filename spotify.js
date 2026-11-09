@@ -39,13 +39,19 @@
   }
 
   async function tokenRequest(body) {
-    const res = await fetch('https://accounts.spotify.com/api/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams(body)
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error_description || data.error || 'Token request failed');
+    // Spotify's token server sometimes answers 5xx "server_error"; retry a few times before giving up.
+    let res, data;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (attempt) await new Promise(r => setTimeout(r, 800 * attempt));
+      res = await fetch('https://accounts.spotify.com/api/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams(body)
+      });
+      data = await res.json().catch(() => ({}));
+      if (res.status < 500) break;
+    }
+    if (!res.ok) throw new Error((data.error_description || data.error || 'Token request failed') + ' (HTTP ' + res.status + ')');
     const old = load(TOKEN_KEY) || {};
     const tokens = {
       access: data.access_token,
@@ -106,6 +112,9 @@
     login, handleCallback,
     isLoggedIn: () => !!(load(TOKEN_KEY) || {}).refresh,
     logout: () => drop(TOKEN_KEY),
+    // Used by phone sign-in: the phone hands its fresh login to the TV.
+    refreshToken: () => (load(TOKEN_KEY) || {}).refresh || null,
+    setRefreshToken: rt => store(TOKEN_KEY, { access: null, refresh: rt, expires: 0 }),
     playback: () => api('/me/player?additional_types=track,episode'),
     play: () => api('/me/player/play', { method: 'PUT' }),
     pause: () => api('/me/player/pause', { method: 'PUT' }),

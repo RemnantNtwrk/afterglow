@@ -251,31 +251,96 @@
   // ---------- Menu ----------
   let menuItems = [], menuFocus = 0;
   function isMenuOpen() { return !$('menu').classList.contains('hidden'); }
-  function openMenu(message, ok) {
-    const items = [];
-    if (source) items.push({ label: 'Resume', run: closeMenu });
-    if (Spotify.isLoggedIn()) {
-      if (source !== 'spotify') items.push({ label: 'Use Spotify', primary: true, run: startSpotify });
-      items.push({ label: 'Disconnect Spotify', run: () => { Spotify.logout(); if (source === 'spotify') stopSpotify(); openMenu('Spotify disconnected.', true); } });
-    } else {
-      items.push({ label: 'Connect Spotify', primary: true, run: () => { $('msg').className = 'ok'; $('msg').textContent = 'Opening Spotify login…'; Spotify.login(); } });
-    }
-    if (source !== 'demo') items.push({ label: 'Demo mode', run: startDemo });
-    menuItems = items; menuFocus = 0;
+  const ON_TV = /Tizen|SMART-TV|Web0S|webOS/i.test(navigator.userAgent);
+
+  function showPanel(opts) {
+    $('sub').textContent = opts.sub || 'Music visuals for your big screen';
+    $('pairBox').style.display = opts.pair ? '' : 'none';
+    menuItems = opts.items || []; menuFocus = 0;
     const box = $('buttons'); box.innerHTML = '';
-    items.forEach((it, i) => {
+    menuItems.forEach((it, i) => {
       const b = document.createElement('button');
       b.textContent = it.label; if (it.primary) b.className = 'primary';
       b.onclick = () => it.run();
       b.onmouseenter = () => { menuFocus = i; paintFocus(); };
       box.appendChild(b);
     });
-    $('msg').className = ok ? 'ok' : ''; $('msg').textContent = message || '';
+    $('msg').className = opts.ok ? 'ok' : ''; $('msg').textContent = opts.message || '';
     $('menu').classList.remove('hidden');
     $('idle').classList.add('hidden');
     paintFocus();
   }
-  function closeMenu() { $('menu').classList.add('hidden'); renderTrack(); }
+
+  function loginHere() { $('msg').className = 'ok'; $('msg').textContent = 'Opening Spotify login…'; Spotify.login(); }
+
+  function openMenu(message, ok) {
+    stopPairing();
+    const items = [];
+    if (source) items.push({ label: 'Resume', run: closeMenu });
+    if (Spotify.isLoggedIn()) {
+      if (source !== 'spotify') items.push({ label: 'Use Spotify', primary: true, run: startSpotify });
+      items.push({ label: 'Disconnect Spotify', run: () => { Spotify.logout(); if (source === 'spotify') stopSpotify(); openMenu('Spotify disconnected.', true); } });
+    } else if (ON_TV) {
+      items.push({ label: 'Sign in with your phone', primary: true, run: openPairScreen });
+      items.push({ label: 'Sign in on this screen', run: loginHere });
+    } else {
+      items.push({ label: 'Connect Spotify', primary: true, run: loginHere });
+      items.push({ label: 'Sign in with your phone', run: openPairScreen });
+    }
+    if (source !== 'demo') items.push({ label: 'Demo mode', run: startDemo });
+    showPanel({ items, message, ok });
+  }
+  function closeMenu() { stopPairing(); $('menu').classList.add('hidden'); renderTrack(); }
+
+  // ---------- Phone sign-in: TV side ----------
+  let pairSession = null, pairTimer = null, pairGen = 0;
+  function stopPairing() {
+    pairGen++;
+    if (pairSession) { pairSession.stop(); pairSession = null; }
+    clearTimeout(pairTimer);
+  }
+  async function openPairScreen() {
+    stopPairing();
+    const gen = pairGen;
+    showPanel({ sub: "Scan with your phone's camera", pair: true, items: [{ label: 'Back', run: () => openMenu() }] });
+    $('qr').innerHTML = '';
+    $('pairStatus').className = 'spin'; $('pairStatus').textContent = 'Creating code…';
+    let session;
+    try {
+      session = await Pair.startTv(rt => {
+        stopPairing();
+        Spotify.setRefreshToken(rt);
+        $('pairStatus').className = ''; $('pairStatus').textContent = 'Connected!';
+        startSpotify(); toast('Spotify connected', 2500);
+      }, msg => { if (gen === pairGen) $('pairStatus').textContent = msg; });
+    } catch (e) {
+      $('pairStatus').className = ''; $('pairStatus').textContent = 'Could not start phone sign-in: ' + e.message;
+      return;
+    }
+    if (gen !== pairGen) { session.stop(); return; } // user left the screen meanwhile
+    pairSession = session;
+    if (window.qrcode) {
+      const q = qrcode(0, 'L'); q.addData(session.url); q.make();
+      $('qr').innerHTML = q.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
+    } else {
+      $('qr').textContent = 'QR code unavailable';
+    }
+    $('pairStatus').className = 'spin'; $('pairStatus').textContent = 'Waiting for your phone…';
+    pairTimer = setTimeout(() => { if (gen === pairGen) openPairScreen(); }, 14 * 60 * 1000); // fresh code before it expires
+  }
+
+  // ---------- Phone sign-in: phone side ----------
+  function showPhoneScreen(message) {
+    showPanel({
+      sub: 'Connect your TV to Spotify',
+      items: [
+        { label: 'Log in with Spotify', primary: true, run: loginHere },
+        { label: 'Cancel', run: () => { Pair.clear(); openMenu(); } }
+      ],
+      message: message || 'Log in on this phone and your TV will connect automatically.',
+      ok: !message
+    });
+  }
   function paintFocus() { Array.from($('buttons').children).forEach((b, i) => b.classList.toggle('focus', i === menuFocus)); }
 
   // ---------- Controls (keyboard + Samsung remote) ----------
@@ -311,7 +376,7 @@
     if (isMenuOpen()) {
       if (k === K.UP || k === K.LEFT) { menuFocus = (menuFocus - 1 + menuItems.length) % menuItems.length; paintFocus(); }
       else if (k === K.DOWN || k === K.RIGHT) { menuFocus = (menuFocus + 1) % menuItems.length; paintFocus(); }
-      else if (k === K.ENTER) { menuItems[menuFocus].run(); }
+      else if (k === K.ENTER) { if (menuItems[menuFocus]) menuItems[menuFocus].run(); }
       else if ((k === K.BACK || k === K.ESC) && source) { closeMenu(); }
       else if (k === K.BACK) { try { tizen.application.getCurrentApplication().exit(); } catch (err) {} }
       else return;
@@ -339,7 +404,25 @@
 
   // ---------- Startup ----------
   (async function init() {
+    Pair.captureFromHash();
     const result = await Spotify.handleCallback();
+
+    // Opened from the TV's QR code: log in here, hand the login to the TV, keep nothing on this phone.
+    if (Pair.pending()) {
+      if (result === 'ok') {
+        const rt = Spotify.refreshToken();
+        Spotify.logout();
+        showPanel({ sub: 'Connecting your TV…', items: [], message: 'Sending your login to the TV…', ok: true });
+        try {
+          await Pair.send(rt);
+          showPanel({ sub: 'All set!', items: [], message: 'Your TV is now connected to Spotify. You can close this page.', ok: true });
+        } catch (e) { showPhoneScreen(e.message); }
+      } else {
+        showPhoneScreen(result && result.startsWith('error:') ? 'Spotify login failed: ' + result.slice(6) : '');
+      }
+      return;
+    }
+
     if (result === 'ok') { startSpotify(); toast('Spotify connected', 2500); return; }
     if (result && result.startsWith('error:')) { openMenu('Spotify login failed: ' + result.slice(6)); return; }
     if (Spotify.isLoggedIn()) { startSpotify(); return; }
